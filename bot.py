@@ -10,7 +10,7 @@ from telegram.ext import (
     filters,
 )
 
-TOKEN = "ТВОЙ_ТОКЕН"
+TOKEN = "8393949970:AAE93YftQcQJent3oTRbW9S6OH_8ddnbrpM"
 PRICE_PER_CM3 = 0.15  # евро за куб. сантиметр
 
 logging.basicConfig(level=logging.INFO)
