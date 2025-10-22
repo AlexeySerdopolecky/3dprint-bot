@@ -92,7 +92,7 @@ async def healthcheck(request):
     return web.Response(text="OK")
 
 
-def main():
+async def run_bot():
     app = ApplicationBuilder().token(TOKEN).build()
 
     # handlers
@@ -102,20 +102,34 @@ def main():
     # --- WEBHOOK ---
     webhook_path = f"/webhook/{TOKEN.split(':')[0]}"
 
-    # создаём aiohttp приложение вручную
+    # создаём aiohttp web-сервер
     web_app = web.Application()
-    web_app.add_routes([web.get("/ping", healthcheck)])  # ✅ работает в v20.7
+    web_app.router.add_get("/ping", healthcheck)
 
-    # интегрируем его в telegram app
-    app._web_app = web_app  # да, это внутреннее поле, но абсолютно безопасно
+    # endpoint для Telegram webhook
+    async def telegram_webhook(request):
+        data = await request.json()
+        await app.update_queue.put(Update.de_json(data, app.bot))
+        return web.Response(text="ok")
 
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=webhook_path,
-        webhook_url=f"{PUBLIC_URL}{webhook_path}",
-        drop_pending_updates=True,
-    )
+    web_app.router.add_post(webhook_path, telegram_webhook)
+
+    # запускаем webhook и aiohttp вместе
+    await app.bot.delete_webhook()
+    await app.bot.set_webhook(f"{PUBLIC_URL}{webhook_path}")
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+
+    print(f"✅ Bot is running on {PUBLIC_URL}{webhook_path}")
+    await app.start()
+    await asyncio.Event().wait()  # держим процесс активным
+
+
+def main():
+    asyncio.run(run_bot())
+
 
 
 if __name__ == "__main__":
