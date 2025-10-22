@@ -104,10 +104,11 @@ def main():
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        webhook_url_path=webhook_path,
+        url_path=webhook_path,  # для версии 20.7 используется url_path
         webhook_url=f"{PUBLIC_URL}{webhook_path}",
         drop_pending_updates=True,  # старые очереди не нужны
-    )
+)
+
 
 
 if __name__ == "__main__":
