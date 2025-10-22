@@ -12,6 +12,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+from aiohttp import web
 
 # ==== НАСТРОЙКИ ЧЕРЕЗ ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ====
 TOKEN = os.environ["BOT_TOKEN"]  # задам на Render
@@ -87,6 +88,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
+async def healthcheck(request):
+    return web.Response(text="OK")
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
@@ -95,11 +98,14 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
+    # ✅ Регистрируем эндпоинт /ping для пингов
+    app.web_app.add_routes([web.get("/ping", healthcheck)])
+    
     # --- WEBHOOK ---
     # Безопасный путь: не светим весь токен в URL.
     # Можно любым способом "слепить" путь, например по chat_id/префиксу токена:
     webhook_path = f"/webhook/{TOKEN.split(':')[0]}"
-
+   
     # run_webhook поднимет встроенный aiohttp-сервер и зарегистрирует webhook в Telegram
     app.run_webhook(
         listen="0.0.0.0",
