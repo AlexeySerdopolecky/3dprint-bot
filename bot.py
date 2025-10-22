@@ -123,6 +123,7 @@ async def run_bot():
     await site.start()
 
     print(f"✅ Bot is running on {PUBLIC_URL}{webhook_path}")
+    await app.initialize()
     await app.start()
     await asyncio.Event().wait()  # держим процесс активным
 
