@@ -1,6 +1,9 @@
-import logging
 import os
-import trimesh
+import logging
+import asyncio
+import os.path as op
+import tempfile
+
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -10,47 +13,106 @@ from telegram.ext import (
     filters,
 )
 
-TOKEN = "8393949970:AAE93YftQcQJent3oTRbW9S6OH_8ddnbrpM"
-PRICE_PER_CM3 = 0.15  # евро за куб. сантиметр
+# ==== НАСТРОЙКИ ЧЕРЕЗ ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ====
+TOKEN = os.environ["BOT_TOKEN"]  # задам на Render
+PUBLIC_URL = os.environ["WEBHOOK_URL"].rstrip("/")  # https://<service>.onrender.com
+PORT = int(os.environ.get("PORT", 10000))
+PRICE_PER_CM3 = float(os.environ.get("PRICE_PER_CM3", "0.15"))  # € за см³
 
 logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("3dprint-bot")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Привет! 👋 Отправь мне STL-файл модели, и я рассчитаю примерную стоимость 3D-печати."
+        "Привет! 👋 Пришли мне STL-файл (как документ), и я посчитаю объём и примерную стоимость 3D-печати."
     )
 
 
-async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file = await update.message.document.get_file()
-    file_path = f"model_{update.message.from_user.id}.stl"
-    await file.download_to_drive(file_path)
+# ---- обработка STL ----
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    doc = update.message.document
+    if not doc:
+        return
 
+    # Проверяем расширение
+    filename = (doc.file_name or "").lower()
+    if not filename.endswith(".stl"):
+        await update.message.reply_text("Пожалуйста, пришли файл с расширением .stl")
+        return
+
+    # Скачиваем во временный файл
+    file = await doc.get_file()
+    fd, tmp_path = tempfile.mkstemp(suffix=".stl")
+    os.close(fd)  # закрываем дескриптор — будем работать по пути
     try:
-        mesh = trimesh.load(file_path)
-        volume_mm3 = mesh.volume
-        volume_cm3 = volume_mm3 / 1000
+        await file.download_to_drive(tmp_path)
+
+        # Импорт здесь, чтобы ускорить старт (и меньше памяти держать на холостом ходу)
+        import trimesh
+
+        # Загружаем сетку (с защитой)
+        mesh = trimesh.load(tmp_path, force="mesh")  # гарантируем именно меш
+        if mesh is None or mesh.is_empty:
+            await update.message.reply_text("Не удалось прочитать модель из STL. Проверь файл.")
+            return
+
+        # Попытка починки (на случай дыр/некорректных нормалей)
+        try:
+            mesh.remove_unreferenced_vertices()
+            mesh.remove_duplicate_faces()
+            mesh.fill_holes()  # может не всегда сработать, но попробуем
+        except Exception:
+            pass
+
+        # Объём в мм³ → см³
+        volume_mm3 = float(mesh.volume)
+        volume_cm3 = volume_mm3 / 1000.0
+
         price = volume_cm3 * PRICE_PER_CM3
 
         await update.message.reply_text(
-            f"📦 Объём модели: {volume_cm3:.2f} см³\n💶 Примерная стоимость печати: {price:.2f} €"
+            f"📦 Объём модели: {volume_cm3:.2f} см³\n"
+            f"💶 Оценка стоимости: {price:.2f} €\n\n"
+            f"ℹ️ Тариф: {PRICE_PER_CM3:.2f} €/см³ (без учёта поддержек и инфилла)"
         )
+
     except Exception as e:
+        log.exception("Ошибка обработки STL")
         await update.message.reply_text(f"Ошибка при обработке файла: {e}")
     finally:
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        try:
+            if op.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
 
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
+    # handlers
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
-    app.run_polling()
+    # --- WEBHOOK ---
+    # Безопасный путь: не светим весь токен в URL.
+    # Можно любым способом "слепить" путь, например по chat_id/префиксу токена:
+    webhook_path = f"/webhook/{TOKEN.split(':')[0]}"
+
+    # run_webhook поднимет встроенный aiohttp-сервер и зарегистрирует webhook в Telegram
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        webhook_url_path=webhook_path,
+        webhook_url=f"{PUBLIC_URL}{webhook_path}",
+        drop_pending_updates=True,  # старые очереди не нужны
+    )
 
 
 if __name__ == "__main__":
-    main()
+    # На всякий случай запускаем в отдельном потоке событий
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
