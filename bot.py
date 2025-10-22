@@ -91,6 +91,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def healthcheck(request):
     return web.Response(text="OK")
 
+
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
@@ -98,23 +99,23 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
-    # ✅ Регистрируем эндпоинт /ping для пингов
-    app.web_app.add_routes([web.get("/ping", healthcheck)])
-    
     # --- WEBHOOK ---
-    # Безопасный путь: не светим весь токен в URL.
-    # Можно любым способом "слепить" путь, например по chat_id/префиксу токена:
     webhook_path = f"/webhook/{TOKEN.split(':')[0]}"
-   
-    # run_webhook поднимет встроенный aiohttp-сервер и зарегистрирует webhook в Telegram
+
+    # создаём aiohttp приложение вручную
+    web_app = web.Application()
+    web_app.add_routes([web.get("/ping", healthcheck)])  # ✅ работает в v20.7
+
+    # интегрируем его в telegram app
+    app._web_app = web_app  # да, это внутреннее поле, но абсолютно безопасно
+
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        url_path=webhook_path,  # для версии 20.7 используется url_path
+        url_path=webhook_path,
         webhook_url=f"{PUBLIC_URL}{webhook_path}",
-        drop_pending_updates=True,  # старые очереди не нужны
-)
-
+        drop_pending_updates=True,
+    )
 
 
 if __name__ == "__main__":
