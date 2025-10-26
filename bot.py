@@ -90,7 +90,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text=text,
-            reply_markup=kB_main_fix := kb_main(),
+            reply_markup=kb_main(),
             parse_mode="Markdown"
         )
 
