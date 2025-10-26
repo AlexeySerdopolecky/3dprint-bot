@@ -4,31 +4,157 @@ import asyncio
 import os.path as op
 import tempfile
 
-from telegram import Update
+from telegram import (
+    Update,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
 from aiohttp import web
 
 # ==== НАСТРОЙКИ ЧЕРЕЗ ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ====
-TOKEN = os.environ["BOT_TOKEN"]  # задам на Render
-PUBLIC_URL = os.environ["WEBHOOK_URL"].rstrip("/")  # https://<service>.onrender.com
+TOKEN = os.environ["BOT_TOKEN"]                     # Render: env var
+PUBLIC_URL = os.environ["WEBHOOK_URL"].rstrip("/") # https://<service>.onrender.com
 PORT = int(os.environ.get("PORT", 10000))
 PRICE_PER_CM3 = float(os.environ.get("PRICE_PER_CM3", "0.15"))  # € за см³
 
 logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("3dprint-bot")
+log = logging.getLogger("life3done-bot")
 
+# ==== CALLBACK KEYS ====
+CB_MAIN = "main"
+CB_MENU = "menu"
+CB_FREE = "free_models"
+CB_CALC = "calc"
+CB_CONTACTS = "contacts"
+CB_BACK = "back"
+CB_ABOUT = "about"
+# внешняя ссылка на поддержку идёт как url-кнопка
 
+# ==== КЛАВИАТУРЫ ====
+def kb_main() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🧭 Меню", callback_data=CB_MENU)],
+        [InlineKeyboardButton("ℹ️ О проекте", callback_data=CB_ABOUT)],
+        [InlineKeyboardButton("💖 Поддержать проект", url="https://t.me/oleksiiserdopoletskyi")],
+    ])
+
+def kb_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📂 Бесплатные модели из роликов", callback_data=CB_FREE)],
+        [InlineKeyboardButton("⚙️ Индивидуальный просчёт 3D-печати", callback_data=CB_CALC)],
+        [InlineKeyboardButton("📞 Контакты для связи", callback_data=CB_CONTACTS)],
+        [InlineKeyboardButton("🔙 Назад", callback_data=CB_BACK)],
+    ])
+
+def kb_free_models() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📎 Излучатель узкий", url="https://www.dropbox.com/scl/fi/fwsqvdn2adhsgsdk02wut/07.02.01.01.010.STL?rlkey=42hno4nt84g8n8n6m0cjx46mz&dl=0")],
+        [InlineKeyboardButton("📎 Приёмник узкий", url="https://www.dropbox.com/scl/fi/xnk1eybil4i59uqi5p5pn/07.02.01.02.010.STL?rlkey=rjx1v5e8d7anq1dv51py0fcfi&dl=0")],
+        [InlineKeyboardButton("🔙 Назад", callback_data=CB_MENU)],
+    ])
+
+def kb_calc_back() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 Назад", callback_data=CB_MENU)],
+    ])
+
+def kb_contacts() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💬 Telegram", url="https://t.me/oleksiiserdopoletskyi")],
+        [InlineKeyboardButton("📸 Instagram", url="https://www.instagram.com/alekseipoletskii")],
+        [InlineKeyboardButton("🔙 Назад", callback_data=CB_MENU)],
+    ])
+
+# ==== HANDLERS ====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Привет! 👋 Пришли мне STL-файл (как документ), и я посчитаю объём и примерную стоимость 3D-печати."
-    )
+    # Пытаемся удалить команду пользователя (в приватном чате может не получиться — это ок)
+    try:
+        if update.message:
+            await update.message.delete()
+    except Exception:
+        pass
 
+    text = (
+        "Привет! 👋 Я бот *Life3Done*.\n"
+        "Здесь ты можешь скачать модели из роликов или сделать предварительный просчёт стоимости твоей 3D-детали."
+    )
+    if update.effective_chat:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=text,
+            reply_markup=kB_main_fix := kb_main(),
+            parse_mode="Markdown"
+        )
+
+async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    data = query.data
+
+    if data in (CB_MAIN, CB_BACK):
+        await query.message.edit_text(
+            "Привет! 👋 Я бот *Life3Done*.\n"
+            "Здесь ты можешь скачать модели из роликов или сделать предварительный просчёт стоимости твоей 3D-детали.",
+            reply_markup=kb_main(),
+            parse_mode="Markdown",
+        )
+        return
+
+    if data == CB_MENU:
+        await query.message.edit_text(
+            "🧭 *Меню* — выбери раздел:",
+            reply_markup=kb_menu(),
+            parse_mode="Markdown",
+        )
+        return
+
+    if data == CB_FREE:
+        await query.message.edit_text(
+            "📂 *Бесплатные модели из роликов* — выбери файл:",
+            reply_markup=kb_free_models(),
+            parse_mode="Markdown",
+        )
+        return
+
+    if data == CB_CALC:
+        await query.message.edit_text(
+            "⚙️ *Индивидуальный просчёт 3D-печати*\n\n"
+            "Отправь STL-файл *как документ*, и я посчитаю объём и примерную стоимость.",
+            reply_markup=kb_calc_back(),
+            parse_mode="Markdown",
+        )
+        # Никаких состояний не ставим — обработчик документов активен всегда.
+        return
+
+    if data == CB_CONTACTS:
+        await query.message.edit_text(
+            "📞 *Контакты для связи*:",
+            reply_markup=kb_contacts(),
+            parse_mode="Markdown",
+        )
+        return
+
+    if data == CB_ABOUT:
+        await query.message.edit_text(
+            "ℹ️ *О проекте*\n\n"
+            "Этот бот создан для демонстрации и распространения полезных 3D-моделей, "
+            "а также для расчёта стоимости индивидуальной 3D-печати. "
+            "Цель проекта — показать, как 3D-печать может сделать повседневную жизнь удобнее и креативнее.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data=CB_BACK)]]),
+            parse_mode="Markdown",
+        )
+        return
 
 # ---- обработка STL ----
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -42,34 +168,34 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Пожалуйста, пришли файл с расширением .stl")
         return
 
+    # Ограничение размера (пример: 30 МБ)
+    if doc.file_size and doc.file_size > 30 * 1024 * 1024:
+        await update.message.reply_text("Файл слишком большой. Пожалуйста, отправь STL до 30 МБ.")
+        return
+
     # Скачиваем во временный файл
     file = await doc.get_file()
     fd, tmp_path = tempfile.mkstemp(suffix=".stl")
-    os.close(fd)  # закрываем дескриптор — будем работать по пути
+    os.close(fd)
     try:
         await file.download_to_drive(tmp_path)
 
-        # Импорт здесь, чтобы ускорить старт (и меньше памяти держать на холостом ходу)
-        import trimesh
+        import trimesh  # импорт локально — быстрее старт, меньше RAM
 
-        # Загружаем сетку (с защитой)
-        mesh = trimesh.load(tmp_path, force="mesh")  # гарантируем именно меш
+        mesh = trimesh.load(tmp_path, force="mesh")
         if mesh is None or mesh.is_empty:
             await update.message.reply_text("Не удалось прочитать модель из STL. Проверь файл.")
             return
 
-        # Попытка починки (на случай дыр/некорректных нормалей)
         try:
             mesh.remove_unreferenced_vertices()
             mesh.remove_duplicate_faces()
-            mesh.fill_holes()  # может не всегда сработать, но попробуем
+            mesh.fill_holes()
         except Exception:
             pass
 
-        # Объём в мм³ → см³
         volume_mm3 = float(mesh.volume)
         volume_cm3 = volume_mm3 / 1000.0
-
         price = volume_cm3 * PRICE_PER_CM3
 
         await update.message.reply_text(
@@ -77,7 +203,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💶 Оценка стоимости: {price:.2f} €\n\n"
             f"ℹ️ Тариф: {PRICE_PER_CM3:.2f} €/см³ (без учёта поддержек и инфилла)"
         )
-
     except Exception as e:
         log.exception("Ошибка обработки STL")
         await update.message.reply_text(f"Ошибка при обработке файла: {e}")
@@ -88,25 +213,25 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
+# ---- healthcheck для cron-job.org ----
 async def healthcheck(request):
     return web.Response(text="OK")
 
-
+# ---- aiohttp + webhook ----
 async def run_bot():
     app = ApplicationBuilder().token(TOKEN).build()
 
     # handlers
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
-    # --- WEBHOOK ---
     webhook_path = f"/webhook/{TOKEN.split(':')[0]}"
 
-    # создаём aiohttp web-сервер
+    # aiohttp web server
     web_app = web.Application()
     web_app.router.add_get("/ping", healthcheck)
 
-    # endpoint для Telegram webhook
     async def telegram_webhook(request):
         data = await request.json()
         await app.update_queue.put(Update.de_json(data, app.bot))
@@ -114,7 +239,7 @@ async def run_bot():
 
     web_app.router.add_post(webhook_path, telegram_webhook)
 
-    # запускаем webhook и aiohttp вместе
+    # регистрируем вебхук и поднимаем сервер
     await app.bot.delete_webhook()
     await app.bot.set_webhook(f"{PUBLIC_URL}{webhook_path}")
     runner = web.AppRunner(web_app)
@@ -125,16 +250,12 @@ async def run_bot():
     print(f"✅ Bot is running on {PUBLIC_URL}{webhook_path}")
     await app.initialize()
     await app.start()
-    await asyncio.Event().wait()  # держим процесс активным
-
+    await asyncio.Event().wait()
 
 def main():
     asyncio.run(run_bot())
 
-
-
 if __name__ == "__main__":
-    # На всякий случай запускаем в отдельном потоке событий
     try:
         main()
     except KeyboardInterrupt:
