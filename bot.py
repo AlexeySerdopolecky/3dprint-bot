@@ -21,7 +21,7 @@ from aiohttp import web
 
 # ==== НАСТРОЙКИ ЧЕРЕЗ ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ====
 TOKEN = os.environ["BOT_TOKEN"]                     # Render: env var
-PUBLIC_URL = os.environ["WEBHOOK_URL"].rstrip("/") # https://<service>.onrender.com
+PUBLIC_URL = os.environ["WEBHOOK_URL"].rstrip("/")  # https://<service>.onrender.com
 PORT = int(os.environ.get("PORT", 10000))
 PRICE_PER_CM3 = float(os.environ.get("PRICE_PER_CM3", "0.15"))  # € за см³
 
@@ -36,7 +36,6 @@ CB_CALC = "calc"
 CB_CONTACTS = "contacts"
 CB_BACK = "back"
 CB_ABOUT = "about"
-# внешняя ссылка на поддержку идёт как url-кнопка
 
 # ==== КЛАВИАТУРЫ ====
 def kb_main() -> InlineKeyboardMarkup:
@@ -75,7 +74,6 @@ def kb_contacts() -> InlineKeyboardMarkup:
 
 # ==== HANDLERS ====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Пытаемся удалить команду пользователя (в приватном чате может не получиться — это ок)
     try:
         if update.message:
             await update.message.delete()
@@ -134,12 +132,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=kb_calc_back(),
             parse_mode="Markdown",
         )
-        # Никаких состояний не ставим — обработчик документов активен всегда.
         return
 
     if data == CB_CONTACTS:
         await query.message.edit_text(
-            "📞 *Контакты для связи*:",
+            "📞 *Контакты для связи:*",
             reply_markup=kb_contacts(),
             parse_mode="Markdown",
         )
@@ -162,25 +159,22 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not doc:
         return
 
-    # Проверяем расширение
     filename = (doc.file_name or "").lower()
     if not filename.endswith(".stl"):
         await update.message.reply_text("Пожалуйста, пришли файл с расширением .stl")
         return
 
-    # Ограничение размера (пример: 30 МБ)
     if doc.file_size and doc.file_size > 30 * 1024 * 1024:
         await update.message.reply_text("Файл слишком большой. Пожалуйста, отправь STL до 30 МБ.")
         return
 
-    # Скачиваем во временный файл
     file = await doc.get_file()
     fd, tmp_path = tempfile.mkstemp(suffix=".stl")
     os.close(fd)
     try:
         await file.download_to_drive(tmp_path)
 
-        import trimesh  # импорт локально — быстрее старт, меньше RAM
+        import trimesh
 
         mesh = trimesh.load(tmp_path, force="mesh")
         if mesh is None or mesh.is_empty:
@@ -203,6 +197,13 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💶 Оценка стоимости: {price:.2f} €\n\n"
             f"ℹ️ Тариф: {PRICE_PER_CM3:.2f} €/см³ (без учёта поддержек и инфилла)"
         )
+
+        # 💡 Добавляем меню после расчёта, чтобы кнопки всегда были снизу
+        await update.message.reply_text(
+            "👇 Вы можете вернуться в меню:",
+            reply_markup=kb_main()
+        )
+
     except Exception as e:
         log.exception("Ошибка обработки STL")
         await update.message.reply_text(f"Ошибка при обработке файла: {e}")
@@ -221,14 +222,12 @@ async def healthcheck(request):
 async def run_bot():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
     webhook_path = f"/webhook/{TOKEN.split(':')[0]}"
 
-    # aiohttp web server
     web_app = web.Application()
     web_app.router.add_get("/ping", healthcheck)
 
@@ -239,7 +238,6 @@ async def run_bot():
 
     web_app.router.add_post(webhook_path, telegram_webhook)
 
-    # регистрируем вебхук и поднимаем сервер
     await app.bot.delete_webhook()
     await app.bot.set_webhook(f"{PUBLIC_URL}{webhook_path}")
     runner = web.AppRunner(web_app)
